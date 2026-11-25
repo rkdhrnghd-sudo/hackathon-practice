@@ -26,3 +26,21 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: 테스트 실행
         run: pytest -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v7
+      - name: 포장하기
+        run: docker build -t hackathon-app:${{ github.sha }} .
+      - name: 켜서 확인하기
+        run: |
+          docker run -d --name app -p 8000:8000 hackathon-app:${{ github.sha }}
+          for _ in $(seq 1 15); do
+            if curl -sf http://localhost:8000/health && curl -sf -o /dev/null http://localhost:8000/hello; then exit 0; fi
+            sleep 1
+          done
+          docker logs app
+          exit 1
