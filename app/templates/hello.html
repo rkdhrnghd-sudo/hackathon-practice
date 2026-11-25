@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>인사하기</title>
+  <style>
+    body { font-family: sans-serif; max-width: 420px; margin: 48px auto; padding: 0 16px; }
+    label { display: block; margin-bottom: 8px; }
+    input, button { width: 100%; box-sizing: border-box; padding: 12px; font-size: 18px; margin-bottom: 8px; }
+    #result { font-size: 20px; min-height: 1.5em; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>인사하기</h1>
+  <form id="form">
+    <label for="name">이름을 적어 주세요</label>
+    <input id="name" maxlength="30" autocomplete="off">
+    <button>인사 받기</button>
+  </form>
+  <p id="result" aria-live="polite"></p>
+  <script>
+    const result = document.getElementById("result");
+    document.getElementById("form").onsubmit = async (event) => {
+      event.preventDefault();
+      const name = document.getElementById("name").value.trim();
+      if (!name) { result.textContent = "이름을 먼저 적어 주세요."; return; }
+      try {
+        const response = await fetch("/api/hello?name=" + encodeURIComponent(name));
+        if (!response.ok) throw new Error();
+        result.textContent = (await response.json()).message;
+      } catch {
+        result.textContent = "인사를 받지 못했습니다. 잠시 뒤 다시 눌러 주세요.";
+      }
+    };
+  </script>
+</body>
+</html>
