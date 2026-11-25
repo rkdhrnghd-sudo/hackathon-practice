@@ -1,0 +1,78 @@
+name: kind 배포 연습
+
+on:
+  push:
+    branches: [practice/kind]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 0 작은 클러스터 만들기
+        run: |
+          kind version
+          kind create cluster --name lab --wait 180s
+          kubectl get nodes
+
+      - name: 1 배포하기 (v1)
+        run: |
+          docker build -q -t hackathon-app:v1 .
+          kind load docker-image hackathon-app:v1 --name lab
+          sed -i "s|image: .*hackathon-app:.*|image: hackathon-app:v1|" k8s/deployment.yaml
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/hackathon-app --timeout=180s
+          kubectl get deployment,pods,svc
+          cat > /tmp/ask.sh <<'S'
+          kubectl port-forward service/hackathon-app 18080:80 >/dev/null 2>&1 &
+          pf=$!
+          for _ in $(seq 1 20); do curl -sf http://127.0.0.1:18080/health >/dev/null && break; sleep 1; done
+          echo "/ = $(curl -s http://127.0.0.1:18080/)   /health = $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/health)"
+          kill $pf
+          S
+          V1=$(bash /tmp/ask.sh); echo "$V1"
+          { echo "## kind 배포 연습 결과"; echo "| 단계 | 결과 |"; echo "|---|---|"; echo "| 1 배포(v1) | $V1 |"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$V1" | grep -q '"hello hackathon"'
+
+      - name: 2 새 버전으로 바꾸기 (v2)
+        run: |
+          sed -i 's/"hello hackathon"/"hello hackathon v2"/' app/main.py
+          docker build -q -t hackathon-app:v2 .
+          kind load docker-image hackathon-app:v2 --name lab
+          kubectl set image deployment/hackathon-app app=hackathon-app:v2
+          kubectl rollout status deployment/hackathon-app --timeout=180s
+          V2=$(bash /tmp/ask.sh); echo "$V2"
+          echo "| 2 새 버전(v2) | $V2 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "$V2" | grep -q 'hackathon v2'
+
+      - name: 3 일부러 고장 난 버전 배포 (v3)
+        run: |
+          sed -i 's/return {"status": "ok"}/raise RuntimeError("일부러 고장")/' app/main.py
+          grep -q 'raise RuntimeError' app/main.py
+          docker build -q -t hackathon-app:v3 .
+          kind load docker-image hackathon-app:v3 --name lab
+          kubectl set image deployment/hackathon-app app=hackathon-app:v3
+          if kubectl rollout status deployment/hackathon-app --timeout=60s; then echo "고장이 잡히지 않음"; exit 1; fi
+          echo "--- 앱 상태"; kubectl get pods -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount
+          BAD=$(kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}' | awk '/:v3$/{print $1; exit}')
+          echo "--- 왜 안 켜지나 (describe)"; kubectl describe pod "$BAD" | grep -iE 'unhealthy|probe failed|Readiness' | tail -3
+          echo "--- 로그"; kubectl logs "$BAD" --tail=30 | grep -E 'RuntimeError|500' | tail -2 || true
+          V3=$(bash /tmp/ask.sh); echo "$V3"
+          echo "| 3 고장 난 버전(v3) | 새 버전은 준비 실패, 손님이 보는 답: $V3 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "$V3" | grep -q 'hackathon v2'
+
+      - name: 4 전 버전으로 되돌리기
+        run: |
+          kubectl rollout history deployment/hackathon-app
+          kubectl rollout undo deployment/hackathon-app
+          kubectl rollout status deployment/hackathon-app --timeout=180s
+          kubectl get pods -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready
+          V4=$(bash /tmp/ask.sh); echo "$V4"
+          echo "| 4 되돌리기 | $V4 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "$V4" | grep -q 'hackathon v2'
